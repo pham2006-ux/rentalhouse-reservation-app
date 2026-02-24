@@ -1,6 +1,8 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
+
+const BUSINESS_HOURS = { start: 10, end: 16 }; // 10:00-16:00
 
 export default function Home() {
   const [view, setView] = useState('login');
@@ -17,10 +19,37 @@ export default function Home() {
   const [editError, setEditError] = useState('');
   const [editSuccess, setEditSuccess] = useState('');
   const [editLoading, setEditLoading] = useState(false);
+  const [availabilityMsg, setAvailabilityMsg] = useState('');
+  const [availabilityOk, setAvailabilityOk] = useState(null);
 
   const [showCancelModal, setShowCancelModal] = useState(false);
   const [cancelLoading, setCancelLoading] = useState(false);
   const [completeMessage, setCompleteMessage] = useState('');
+
+  // Dynamic property list from Google Sheets
+  const [properties, setProperties] = useState([]);
+  const [propertiesLoading, setPropertiesLoading] = useState(false);
+
+  // Fetch properties from Google Sheets
+  async function fetchProperties() {
+    setPropertiesLoading(true);
+    try {
+      const res = await fetch('/api/properties');
+      const data = await res.json();
+      if (data.properties) {
+        setProperties(data.properties);
+      }
+    } catch (err) {
+      console.error('Failed to fetch properties:', err);
+    } finally {
+      setPropertiesLoading(false);
+    }
+  }
+
+  // Load properties on mount
+  useEffect(() => {
+    fetchProperties();
+  }, []);
 
   // --- Login ---
   async function handleLogin(e) {
@@ -66,7 +95,69 @@ export default function Home() {
     }
     setEditError('');
     setEditSuccess('');
+    setAvailabilityMsg('');
+    setAvailabilityOk(null);
+    // Refresh properties when opening edit
+    fetchProperties();
     setView('edit');
+  }
+
+  // --- Check availability when date or property changes ---
+  async function checkAvailability(property, dateTime) {
+    if (!property || !dateTime) {
+      setAvailabilityMsg('');
+      setAvailabilityOk(null);
+      return;
+    }
+
+    // Client-side validation: business hours
+    const d = new Date(dateTime);
+    const hour = d.getHours();
+    if (hour < BUSINESS_HOURS.start || hour >= BUSINESS_HOURS.end) {
+      setAvailabilityMsg('⚠️ 内見対応時間は10:00〜16:00です。');
+      setAvailabilityOk(false);
+      return;
+    }
+
+    // Client-side validation: Wednesday
+    if (d.getDay() === 3) {
+      setAvailabilityMsg('⚠️ 水曜日は定休日です。');
+      setAvailabilityOk(false);
+      return;
+    }
+
+    try {
+      const res = await fetch('/api/check-availability', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          property,
+          dateTime: new Date(dateTime).toISOString(),
+          excludeRecordId: recordId,
+        }),
+      });
+      const data = await res.json();
+      if (data.available) {
+        setAvailabilityMsg('✅ この時間帯は予約可能です。');
+        setAvailabilityOk(true);
+      } else {
+        setAvailabilityMsg(`⚠️ ${data.reason}`);
+        setAvailabilityOk(false);
+      }
+    } catch {
+      setAvailabilityMsg('');
+      setAvailabilityOk(null);
+    }
+  }
+
+  function handleDateChange(val) {
+    setEditDate(val);
+    checkAvailability(editProperty, val);
+  }
+
+  function handlePropertyChange(val) {
+    setEditProperty(val);
+    if (editDate) checkAvailability(val, editDate);
   }
 
   async function handleUpdate(e) {
@@ -155,6 +246,17 @@ export default function Home() {
     } catch { return dateStr; }
   }
 
+  function getMinDate() {
+    const tomorrow = new Date();
+    tomorrow.setDate(tomorrow.getDate() + 1);
+    return tomorrow.toISOString().split('T')[0];
+  }
+
+  // Get property info for display
+  function getPropertyInfo(name) {
+    return properties.find(p => p['物件名'] === name);
+  }
+
   return (
     <div className="app-wrapper">
       <div className="card">
@@ -163,7 +265,8 @@ export default function Home() {
         {view === 'login' && (
           <>
             <div className="card-header">
-              <h1>🏠 内見予約 変更・キャンセル</h1>
+              <h1>🏠 若葉ホームズ</h1>
+              <p className="subtitle">内見予約 変更・キャンセル</p>
               <p>受付番号と電話番号でログインしてください</p>
             </div>
             <div className="card-body">
@@ -245,6 +348,7 @@ export default function Home() {
             </div>
             <div className="card-body">
               <div className="alert alert-warning">⚠️ 変更可能な項目は<strong>電話番号・内見日時・物件</strong>です。</div>
+              <div className="alert alert-info">📅 内見対応: 10:00〜16:00（水曜・祝日休み）/ 1時間につき1組のみ</div>
               <form onSubmit={handleUpdate}>
                 <div className="field">
                   <label htmlFor="editPhone">📞 電話番号</label>
@@ -252,15 +356,53 @@ export default function Home() {
                 </div>
                 <div className="field">
                   <label htmlFor="editDate">📅 内見希望日時</label>
-                  <input id="editDate" type="datetime-local" value={editDate} onChange={e => setEditDate(e.target.value)} />
+                  <input
+                    id="editDate"
+                    type="datetime-local"
+                    value={editDate}
+                    onChange={e => handleDateChange(e.target.value)}
+                    min={`${getMinDate()}T10:00`}
+                    step="3600"
+                  />
                 </div>
                 <div className="field">
                   <label htmlFor="editProp">🏠 物件名</label>
-                  <input id="editProp" type="text" value={editProperty} onChange={e => setEditProperty(e.target.value)} />
+                  {propertiesLoading ? (
+                    <div className="loading-text"><span className="spinner spinner-sm" /> 物件データ読み込み中...</div>
+                  ) : (
+                    <select
+                      id="editProp"
+                      value={editProperty}
+                      onChange={e => handlePropertyChange(e.target.value)}
+                    >
+                      <option value="">物件を選択してください</option>
+                      {properties.map(p => (
+                        <option key={p['物件ID'] || p['物件名']} value={p['物件名']}>
+                          {p['物件名']} - {p['エリア']} / {p['家賃']} / {p['間取り']} {p['状況'] === '満室' ? '(満室)' : ''}
+                        </option>
+                      ))}
+                    </select>
+                  )}
+                  {editProperty && getPropertyInfo(editProperty) && (
+                    <div className="property-detail">
+                      <span>📍 {getPropertyInfo(editProperty)['エリア']}</span>
+                      <span>💰 {getPropertyInfo(editProperty)['家賃']}</span>
+                      <span>🏗 {getPropertyInfo(editProperty)['間取り']}</span>
+                    </div>
+                  )}
                 </div>
+                {availabilityMsg && (
+                  <div className={`alert ${availabilityOk ? 'alert-success' : 'alert-danger'}`}>
+                    {availabilityMsg}
+                  </div>
+                )}
                 {editError && <div className="alert alert-danger">{editError}</div>}
                 {editSuccess && <div className="alert alert-success">{editSuccess}</div>}
-                <button className="btn btn-primary" type="submit" disabled={editLoading}>
+                <button
+                  className="btn btn-primary"
+                  type="submit"
+                  disabled={editLoading || availabilityOk === false}
+                >
                   {editLoading ? <><span className="spinner" /> 保存中...</> : '💾 変更を保存'}
                 </button>
                 <button className="btn btn-outline" type="button" onClick={() => setView('detail')}>← 戻る</button>
