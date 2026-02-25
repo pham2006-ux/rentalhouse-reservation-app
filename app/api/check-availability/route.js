@@ -42,10 +42,10 @@ export async function POST(request) {
     const startISO = hourStart.toISOString();
     const endISO = hourEnd.toISOString();
 
-    let filterFormula = `AND({物件名}='${property}',{ステータス}='予約中',IS_AFTER({内見希望日時},'${startISO}'),IS_BEFORE({内見希望日時},'${endISO}'))`;
+    let filterFormula = `AND({物件名}='${property}',{ステータス}='予約中',NOT(IS_BEFORE({内見希望日時},'${startISO}')),IS_BEFORE({内見希望日時},'${endISO}'))`;
 
     if (excludeRecordId) {
-        filterFormula = `AND({物件名}='${property}',{ステータス}='予約中',IS_AFTER({内見希望日時},'${startISO}'),IS_BEFORE({内見希望日時},'${endISO}'),RECORD_ID()!='${excludeRecordId}')`;
+        filterFormula = `AND({物件名}='${property}',{ステータス}='予約中',NOT(IS_BEFORE({内見希望日時},'${startISO}')),IS_BEFORE({内見希望日時},'${endISO}'),RECORD_ID()!='${excludeRecordId}')`;
     }
 
     const encodedFilter = encodeURIComponent(filterFormula);
