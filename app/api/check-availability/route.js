@@ -1,5 +1,11 @@
 import { NextResponse } from 'next/server';
 
+const JST_OFFSET = 9 * 60 * 60 * 1000; // UTC+9
+
+function toJST(date) {
+    return new Date(date.getTime() + JST_OFFSET);
+}
+
 export async function POST(request) {
     const { property, dateTime, excludeRecordId } = await request.json();
 
@@ -14,24 +20,29 @@ export async function POST(request) {
     const AIRTABLE_BASE_ID = process.env.AIRTABLE_BASE_ID;
     const TABLE_NAME = encodeURIComponent('内見予約');
 
-    // Parse the requested time and calculate the 1-hour window
+    // Parse the requested time in JST
     const requestedDate = new Date(dateTime);
-    const hourStart = new Date(requestedDate);
-    hourStart.setMinutes(0, 0, 0);
-    const hourEnd = new Date(hourStart);
-    hourEnd.setHours(hourStart.getHours() + 1);
+    const jstDate = toJST(requestedDate);
+    const jstHour = jstDate.getUTCHours();
+    const jstDay = jstDate.getUTCDay();
 
-    // Check business hours (10:00-16:00, last entry 15:30)
-    const hour = hourStart.getHours();
-    if (hour < 10 || hour >= 16) {
+    // Calculate 1-hour window in UTC (for Airtable query)
+    const hourStart = new Date(requestedDate);
+    hourStart.setUTCMinutes(0, 0, 0);
+    // Snap to the correct hour based on JST
+    hourStart.setUTCHours(jstHour - 9); // Convert JST hour back to UTC
+    const hourEnd = new Date(hourStart.getTime() + 60 * 60 * 1000);
+
+    // Check business hours (10:00-16:00 JST)
+    if (jstHour < 10 || jstHour >= 16) {
         return NextResponse.json({
             available: false,
             reason: '内見対応時間は10:00〜16:00です。この時間帯でご指定ください。',
         });
     }
 
-    // Check day of week (Wednesday = 3 is closed)
-    if (requestedDate.getDay() === 3) {
+    // Check day of week (Wednesday = 3 is closed, JST)
+    if (jstDay === 3) {
         return NextResponse.json({
             available: false,
             reason: '水曜日は定休日のため、内見のご予約を承ることができません。',
@@ -63,12 +74,13 @@ export async function POST(request) {
         if (data.records && data.records.length > 0) {
             return NextResponse.json({
                 available: false,
-                reason: `${property}の${hour}:00〜${hour + 1}:00は既に予約が入っています。別の時間帯をお選びください。`,
+                reason: `${property}の${jstHour}:00〜${jstHour + 1}:00は既に予約が入っています。別の時間帯をお選びください。`,
             });
         }
 
         return NextResponse.json({ available: true });
     } catch (err) {
+        console.error('Availability check error:', err);
         return NextResponse.json(
             { error: 'サーバーエラーが発生しました。' },
             { status: 500 }

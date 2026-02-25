@@ -1,5 +1,11 @@
 import { NextResponse } from 'next/server';
 
+const JST_OFFSET = 9 * 60 * 60 * 1000; // UTC+9
+
+function toJST(date) {
+    return new Date(date.getTime() + JST_OFFSET);
+}
+
 export async function POST(request) {
     const { recordId, fields } = await request.json();
 
@@ -33,22 +39,26 @@ export async function POST(request) {
 
             if (checkProperty && checkDateTime) {
                 const requestedDate = new Date(checkDateTime);
-                const hourStart = new Date(requestedDate);
-                hourStart.setMinutes(0, 0, 0);
-                const hourEnd = new Date(hourStart);
-                hourEnd.setHours(hourStart.getHours() + 1);
-                const hour = hourStart.getHours();
+                const jstDate = toJST(requestedDate);
+                const jstHour = jstDate.getUTCHours();
+                const jstDay = jstDate.getUTCDay();
 
-                // Business hours check
-                if (hour < 10 || hour >= 16) {
+                // Calculate 1-hour window in UTC
+                const hourStart = new Date(requestedDate);
+                hourStart.setUTCMinutes(0, 0, 0);
+                hourStart.setUTCHours(jstHour - 9);
+                const hourEnd = new Date(hourStart.getTime() + 60 * 60 * 1000);
+
+                // Business hours check (JST)
+                if (jstHour < 10 || jstHour >= 16) {
                     return NextResponse.json(
                         { error: '内見対応時間は10:00〜16:00です。この時間帯でご指定ください。' },
                         { status: 400 }
                     );
                 }
 
-                // Wednesday check
-                if (requestedDate.getDay() === 3) {
+                // Wednesday check (JST)
+                if (jstDay === 3) {
                     return NextResponse.json(
                         { error: '水曜日は定休日のため、内見のご予約を承ることができません。' },
                         { status: 400 }
@@ -73,13 +83,12 @@ export async function POST(request) {
 
                 if (dupData.records && dupData.records.length > 0) {
                     return NextResponse.json(
-                        { error: `${checkProperty}の${hour}:00〜${hour + 1}:00は既に予約が入っています。別の時間帯をお選びください。` },
+                        { error: `${checkProperty}の${jstHour}:00〜${jstHour + 1}:00は既に予約が入っています。別の時間帯をお選びください。` },
                         { status: 409 }
                     );
                 }
             }
         } catch (err) {
-            // Continue with update even if check fails
             console.error('Availability check error:', err);
         }
     }
